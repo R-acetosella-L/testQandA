@@ -1,0 +1,13 @@
+# 環境変数
+.env
+
+# FAISSインデックス
+faiss_index/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
