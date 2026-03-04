@@ -2,7 +2,7 @@ flask
 openai
 python-dotenv
 pypdf
-langchain
 tiktoken
 gunicorn
-faiss-cpu
+faiss-cpu==1.7.4
+langchain==0.1.13
