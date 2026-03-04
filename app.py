@@ -3,9 +3,12 @@ import time
 import re
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+from openai import OpenAI
+
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
-from openai import OpenAI
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 load_dotenv()
 
@@ -14,9 +17,60 @@ app = Flask(__name__)
 API_TOKEN = os.getenv("API_TOKEN")
 client = OpenAI()
 
-db = FAISS.load_local("faiss_index", OpenAIEmbeddings(), allow_dangerous_deserialization=True)
+# ==============================
+# 🔹 インデックス設定
+# ==============================
 
-# レート制限（簡易：IPごと1分5回）
+INDEX_DIR = "faiss_index"
+PDF_DIR = "pdf"  # ← PDFはここに複数入れる
+
+embeddings = OpenAIEmbeddings()
+
+def create_vectorstore():
+    print("📄 PDFからインデックスを作成します")
+
+    documents = []
+
+    for filename in os.listdir(PDF_DIR):
+        if filename.endswith(".pdf"):
+            path = os.path.join(PDF_DIR, filename)
+            loader = PyPDFLoader(path)
+            docs = loader.load()
+
+            for d in docs:
+                d.metadata["source"] = filename
+
+            documents.extend(docs)
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200
+    )
+
+    split_docs = splitter.split_documents(documents)
+
+    vectorstore = FAISS.from_documents(split_docs, embeddings)
+    vectorstore.save_local(INDEX_DIR)
+
+    return vectorstore
+
+
+# 🔹 インデックス読み込み or 作成
+if os.path.exists(INDEX_DIR):
+    print("📂 既存インデックスを読み込みます")
+    db = FAISS.load_local(
+        INDEX_DIR,
+        embeddings,
+        allow_dangerous_deserialization=True
+    )
+else:
+    db = create_vectorstore()
+
+
+# ==============================
+# 🔹 レート制限（IPごと1分5回）
+# ==============================
+
 request_log = {}
 
 def rate_limit(ip):
@@ -30,11 +84,21 @@ def rate_limit(ip):
     request_log[ip].append(now)
     return True
 
-# 個人情報検知
+
+# ==============================
+# 🔹 個人情報検知
+# ==============================
+
 PII_PATTERN = r"(住所|電話|メール|@|氏名)"
+
+
+# ==============================
+# 🔹 チャットAPI
+# ==============================
 
 @app.route("/chat", methods=["POST"])
 def chat():
+
     # トークン認証
     token = request.headers.get("X-API-TOKEN")
     if token != API_TOKEN:
@@ -52,13 +116,15 @@ def chat():
     if re.search(PII_PATTERN, question):
         return jsonify({"answer": "個人情報は入力しないでください。"}), 400
 
+    # 類似検索
     docs = db.similarity_search(question, k=3)
 
     context = ""
     sources = set()
+
     for d in docs:
         context += d.page_content + "\n"
-        sources.add(d.metadata["source"])
+        sources.add(d.metadata.get("source", "不明"))
 
     prompt = f"""
 以下の資料に基づいて回答してください。
@@ -80,6 +146,7 @@ def chat():
         "answer": answer,
         "sources": list(sources)
     })
+
 
 if __name__ == "__main__":
     app.run()
