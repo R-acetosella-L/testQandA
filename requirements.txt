@@ -5,3 +5,4 @@ faiss-cpu
 pypdf
 langchain
 tiktoken
+gunicorn
